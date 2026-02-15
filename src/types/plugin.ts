@@ -22,6 +22,7 @@ export namespace Plugin {
     name: string;
     path: string;
     cover?: string;
+    badge?: string;
   };
   export type SourceNovel = {
     /** Comma separated genre list -> "action,fantasy,romance" */
