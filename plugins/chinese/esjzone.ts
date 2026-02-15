@@ -175,21 +175,15 @@ class ESJZone implements Plugin.PluginBase {
         novelCover = this.site + novelCover;
       }
 
-      // Detect R18 badge from card tags/labels
+      // Detect R18/18+ badge from card
+      // ESJZone uses <div class="product-badge top">18+</div> for adult content
       let badge: string | undefined;
-      const cardText = cardEl.text();
-      const tagEls = cardEl.find('a.tag, .badge, .label');
-      let hasR18 = false;
-      tagEls.each((_j, tagEl) => {
-        const tagText = $(tagEl).text().trim().toUpperCase();
-        if (tagText === 'R18' || tagText === 'R-18') {
-          hasR18 = true;
-        }
-      });
-      if (!hasR18 && /\bR-?18\b/i.test(cardText)) {
-        hasR18 = true;
-      }
-      if (hasR18) {
+      const productBadge = cardEl.find('.product-badge').text().trim();
+      if (
+        productBadge === '18+' ||
+        /\bR-?18\b/i.test(productBadge) ||
+        /\b18\+/.test(productBadge)
+      ) {
         badge = 'R18';
       }
 
