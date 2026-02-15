@@ -10,38 +10,61 @@ class ESJZone implements Plugin.PluginBase {
   name = 'ESJZone';
   icon = 'src/cn/esjzone/icon.png';
   site = 'https://www.esjzone.cc';
-  version = '1.0.0';
+  version = '2.0.0';
 
-  // Allow WebView login for R18/member-only content
+  // Enable WebView login for member-only content
   webStorageUtilized = true;
 
   async popularNovels(
     pageNo: number,
     { filters }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
-    let url: string;
-
     const tag = filters?.tag?.value;
+    const category = filters?.category?.value || '1';
+    const sort = filters?.sort?.value || '1';
+
     if (tag && tag.trim() !== '') {
       // Tag-based browsing
-      url =
+      const url =
         pageNo === 1
           ? `${this.site}/tags/${encodeURI(tag.trim())}/`
           : `${this.site}/tags/${encodeURI(tag.trim())}/${pageNo}.html`;
-    } else {
-      // Default list (原創小說)
-      url =
-        pageNo === 1
-          ? `${this.site}/list-21/`
-          : `${this.site}/list-21/${pageNo}.html`;
+      const body = await fetchText(url);
+      if (body === '') throw Error('無法獲取小說列表，請檢查網路');
+      return this.parseNovelList(body);
     }
+
+    // List page: /list-{category}{sort}/{page}.html
+    // category 0 = 全部小說 (all, requires login)
+    // category 1 = 日本輕小說 (requires login)
+    // category 2 = 原創小說 (public)
+    // category 3 = 韓國輕小說 (requires login)
+    const listPath = `list-${category}${sort}`;
+    const url =
+      pageNo === 1
+        ? `${this.site}/${listPath}/`
+        : `${this.site}/${listPath}/${pageNo}.html`;
 
     const body = await fetchText(url);
     if (body === '') throw Error('無法獲取小說列表，請檢查網路');
 
-    return this.parseNovelList(body);
+    const novels = this.parseNovelList(body);
+
+    // If no novels found in translated category, it likely requires login
+    if (novels.length === 0 && category !== '2') {
+      return [
+        {
+          name: '⚠ 需要登入才能瀏覽輕小說 — 請先在 WebView 中登入',
+          path: '/my/login',
+          cover: defaultCover,
+        },
+      ];
+    }
+
+    return novels;
   }
 
+  /** Parse the card-based list page */
   private parseNovelList(body: string): Plugin.NovelItem[] {
     const $ = parseHTML(body);
     const novels: Plugin.NovelItem[] = [];
@@ -56,7 +79,6 @@ class ESJZone implements Plugin.PluginBase {
       let novelCover =
         cardEl.find('.main-img .lazyload').attr('data-src') || '';
 
-      // Skip placeholder empty covers
       if (novelCover.includes('/assets/img/empty.jpg') || novelCover === '') {
         novelCover = defaultCover;
       } else if (novelCover.startsWith('/') && !novelCover.startsWith('//')) {
@@ -65,7 +87,7 @@ class ESJZone implements Plugin.PluginBase {
 
       novels.push({
         name: novelName,
-        path: href, // e.g. /detail/1684898804.html
+        path: href,
         cover: novelCover,
       });
     });
@@ -89,15 +111,18 @@ class ESJZone implements Plugin.PluginBase {
     const titleEl = $('h2.text-normal');
     const hasNovelContent = titleEl.length > 0;
 
-    // If page has no novel content and seems to require login
     if (!hasNovelContent && hasLoginPrompt) {
       const novel: Plugin.SourceNovel = {
         path: novelPath,
         chapters: [],
         name: '需要登入才能瀏覽此作品',
         summary:
-          '此作品（日韓翻譯小說等）需要登入 ESJZone 帳號才能瀏覽。\n' +
-          '請在 WebView 中開啟此頁面並登入後重試。',
+          '此作品需要登入 ESJZone 帳號才能瀏覽。\n' +
+          '請在 WebView 中開啟此頁面並登入後重試。\n\n' +
+          '操作步驟：\n' +
+          '1. 點擊右上角的 WebView 圖示\n' +
+          '2. 在網頁中登入 ESJZone 帳號\n' +
+          '3. 返回後重新整理此頁面',
       };
       novel.cover = defaultCover;
       return novel;
@@ -125,7 +150,6 @@ class ESJZone implements Plugin.PluginBase {
           $(el).find('a').text().trim() || text.replace(/作者[:：]\s*/, '');
       }
       if (text.startsWith('類型:') || text.startsWith('類型：')) {
-        // Type info (e.g. 原創)
         const typeText = text.replace(/類型[:：]\s*/, '').trim();
         if (typeText) {
           novel.status = typeText.includes('完結')
@@ -133,13 +157,8 @@ class ESJZone implements Plugin.PluginBase {
             : NovelStatus.Ongoing;
         }
       }
-      if (text.startsWith('更新日期:') || text.startsWith('更新日期：')) {
-        // We don't have a field for last update in SourceNovel,
-        // but we can use it to determine ongoing status
-      }
     });
 
-    // Default status to Ongoing if not set
     if (!novel.status) {
       novel.status = NovelStatus.Ongoing;
     }
@@ -165,7 +184,6 @@ class ESJZone implements Plugin.PluginBase {
       const tagText = $(el).text().trim();
       if (tagText) tags.push(tagText);
     });
-    // Also check sidebar tags (visible on larger screens)
     if (tags.length === 0) {
       $('a.tag').each((_i, el) => {
         const href = $(el).attr('href') || '';
@@ -195,7 +213,6 @@ class ESJZone implements Plugin.PluginBase {
 
       chapterNumber++;
 
-      // Convert absolute URL to relative path
       let chapterPath = chapterHref;
       if (chapterPath.startsWith(this.site)) {
         chapterPath = chapterPath.replace(this.site, '');
@@ -221,7 +238,6 @@ class ESJZone implements Plugin.PluginBase {
 
     const $ = parseHTML(body);
 
-    // Detect login-required pages
     const pageText = $('body').text();
     const hasForumContent = $('div.forum-content').length > 0;
 
@@ -232,20 +248,18 @@ class ESJZone implements Plugin.PluginBase {
       pageText.includes('需要登入') ||
       (!hasForumContent && pageText.includes('登入 / 註冊'))
     ) {
-      return '<p style="text-align:center;color:red;font-weight:bold;">此內容需要登入才能閱讀。請在 WebView 中登入 ESJZone 帳號後重試。</p>';
+      return '<p style="text-align:center;color:red;font-weight:bold;">此內容需要登入才能閱讀。<br/>請點擊右上角 WebView 圖示，在網頁中登入 ESJZone 帳號後返回重試。</p>';
     }
 
-    // Detect adult verification pages
     if (
       pageText.includes('成人確認') ||
       pageText.includes('年齡確認') ||
       pageText.includes('未成年請勿') ||
       pageText.includes('18歲以上')
     ) {
-      return '<p style="text-align:center;color:red;font-weight:bold;">此內容需要成人驗證。請在 WebView 中完成年齡確認後重試。</p>';
+      return '<p style="text-align:center;color:red;font-weight:bold;">此內容需要成人驗證。<br/>請在 WebView 中完成年齡確認後重試。</p>';
     }
 
-    // Detect password-protected chapters
     if (
       pageText.includes('密碼') ||
       pageText.includes('密码') ||
@@ -254,14 +268,11 @@ class ESJZone implements Plugin.PluginBase {
       return '<p style="text-align:center;color:red;font-weight:bold;">此章節受密碼保護，無法直接閱讀。</p>';
     }
 
-    // Extract chapter content
     const contentEl = $('div.forum-content');
     if (contentEl.length === 0) {
       return '<p>無法找到章節內容。</p>';
     }
 
-    // Clean up the content
-    // Remove script tags, ads, etc.
     contentEl.find('script, style, .ad, ins.adsbygoogle').remove();
 
     const chapterText = contentEl.html() || '';
@@ -272,7 +283,6 @@ class ESJZone implements Plugin.PluginBase {
     searchTerm: string,
     pageNo: number,
   ): Promise<Plugin.NovelItem[]> {
-    // ESJZone uses tag-based search at /tags/{term}/
     const url =
       pageNo === 1
         ? `${this.site}/tags/${encodeURI(searchTerm)}/`
@@ -287,8 +297,34 @@ class ESJZone implements Plugin.PluginBase {
   resolveUrl = (path: string) => this.site + path;
 
   filters = {
+    category: {
+      label: '分類',
+      value: '1',
+      options: [
+        { label: '全部小說（需登入）', value: '0' },
+        { label: '日本輕小說（需登入）', value: '1' },
+        { label: '原創小說', value: '2' },
+        { label: '韓國輕小說（需登入）', value: '3' },
+      ],
+      type: FilterTypes.Picker,
+    },
+    sort: {
+      label: '排序',
+      value: '1',
+      options: [
+        { label: '最新更新', value: '1' },
+        { label: '最新上架', value: '2' },
+        { label: '最高評分', value: '3' },
+        { label: '最多觀看', value: '4' },
+        { label: '最多文章', value: '5' },
+        { label: '最多討論', value: '6' },
+        { label: '最多收藏', value: '7' },
+        { label: '最多字數', value: '8' },
+      ],
+      type: FilterTypes.Picker,
+    },
     tag: {
-      label: '標籤篩選',
+      label: '標籤搜尋',
       value: '',
       type: FilterTypes.TextInput,
     },
