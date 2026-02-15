@@ -13,7 +13,7 @@ class ESJZone implements Plugin.PluginBase {
   name = 'ESJZone';
   icon = 'src/cn/esjzone/icon.png';
   site = 'https://www.esjzone.cc';
-  version = '2.2.0';
+  version = '2.3.0';
 
   // Enable WebView login for member-only content
   webStorageUtilized = true;
@@ -187,6 +187,27 @@ class ESJZone implements Plugin.PluginBase {
         badge = 'R18';
       }
 
+      // Extract rating and word count from card-other columns
+      let ratingStr = '';
+      let wordCountStr = '';
+      cardEl.find('.card-other .column').each((_j, col) => {
+        const colEl = $(col);
+        if (colEl.find('.icon-star-s').length > 0) {
+          ratingStr = colEl.text().trim();
+        } else if (colEl.find('.icon-file-text').length > 0) {
+          wordCountStr = colEl.text().trim();
+        }
+      });
+
+      // Build info string for cover overlay (e.g. "★5.0 | 42,795字")
+      const infoParts: string[] = [];
+      if (ratingStr && ratingStr !== '0') {
+        infoParts.push('★' + ratingStr);
+      }
+      if (wordCountStr) {
+        infoParts.push(wordCountStr + '字');
+      }
+
       const item: Plugin.NovelItem = {
         name: novelName,
         path: href,
@@ -194,6 +215,9 @@ class ESJZone implements Plugin.PluginBase {
       };
       if (badge) {
         item.badge = badge;
+      }
+      if (infoParts.length > 0) {
+        item.info = infoParts.join(' | ');
       }
 
       novels.push(item);
@@ -308,6 +332,18 @@ class ESJZone implements Plugin.PluginBase {
       this.collectTags(tags);
     }
 
+    // Extract update date from book-detail metadata (e.g. "更新日期: 2026-02-15")
+    let updateDate = '';
+    $('ul.book-detail li').each((_i, el) => {
+      const text = $(el).text().trim();
+      if (text.startsWith('更新日期:') || text.startsWith('更新日期：')) {
+        const match = text.match(/(\d{4}[-/]\d{1,2}[-/]\d{1,2})/);
+        if (match) {
+          updateDate = match[1];
+        }
+      }
+    });
+
     // Chapters from #chapterList
     const chapters: Plugin.ChapterItem[] = [];
     let chapterNumber = 0;
@@ -335,6 +371,11 @@ class ESJZone implements Plugin.PluginBase {
         chapterNumber: chapterNumber,
       });
     });
+
+    // Assign update date to the latest (first) chapter's releaseTime
+    if (updateDate && chapters.length > 0) {
+      chapters[0].releaseTime = updateDate;
+    }
 
     novel.chapters = chapters;
     return novel;

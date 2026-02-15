@@ -23,6 +23,8 @@ export namespace Plugin {
     path: string;
     cover?: string;
     badge?: string;
+    /** Short info line displayed on the cover (e.g. rating, word count) */
+    info?: string;
   };
   export type SourceNovel = {
     /** Comma separated genre list -> "action,fantasy,romance" */
