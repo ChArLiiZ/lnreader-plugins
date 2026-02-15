@@ -80,10 +80,33 @@ class ESJZone implements Plugin.PluginBase {
 
     const $ = parseHTML(body);
 
+    // Detect login-required / redirected pages
+    const pageText = $('body').text();
+    const hasLoginPrompt =
+      pageText.includes('請先登入') ||
+      pageText.includes('请先登入') ||
+      pageText.includes('登入 / 註冊');
+    const titleEl = $('h2.text-normal');
+    const hasNovelContent = titleEl.length > 0;
+
+    // If page has no novel content and seems to require login
+    if (!hasNovelContent && hasLoginPrompt) {
+      const novel: Plugin.SourceNovel = {
+        path: novelPath,
+        chapters: [],
+        name: '需要登入才能瀏覽此作品',
+        summary:
+          '此作品（日韓翻譯小說等）需要登入 ESJZone 帳號才能瀏覽。\n' +
+          '請在 WebView 中開啟此頁面並登入後重試。',
+      };
+      novel.cover = defaultCover;
+      return novel;
+    }
+
     const novel: Plugin.SourceNovel = {
       path: novelPath,
       chapters: [],
-      name: $('h2.text-normal').text().trim() || 'Untitled',
+      name: titleEl.text().trim() || 'Untitled',
     };
 
     // Cover image
@@ -200,11 +223,14 @@ class ESJZone implements Plugin.PluginBase {
 
     // Detect login-required pages
     const pageText = $('body').text();
+    const hasForumContent = $('div.forum-content').length > 0;
+
     if (
       pageText.includes('請先登入') ||
       pageText.includes('请先登入') ||
       pageText.includes('請登入後再訪問') ||
-      pageText.includes('需要登入')
+      pageText.includes('需要登入') ||
+      (!hasForumContent && pageText.includes('登入 / 註冊'))
     ) {
       return '<p style="text-align:center;color:red;font-weight:bold;">此內容需要登入才能閱讀。請在 WebView 中登入 ESJZone 帳號後重試。</p>';
     }
