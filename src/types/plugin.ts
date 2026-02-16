@@ -92,6 +92,19 @@ export namespace Plugin {
     parseChapter(chapterPath: string): Promise<string>;
     searchNovels(searchTerm: string, pageNo: number): Promise<NovelItem[]>;
     resolveUrl?(path: string, isNovel?: boolean): string;
+    /**
+     * Parse comments for a novel or chapter page.
+     * @param path - novel path or chapter path
+     * @returns array of comments
+     */
+    parseComments?(path: string): Promise<CommentItem[]>;
+  };
+
+  export type CommentItem = {
+    author: string;
+    content: string;
+    date?: string;
+    avatar?: string;
   };
 
   export type PagePlugin = {

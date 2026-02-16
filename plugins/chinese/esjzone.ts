@@ -13,7 +13,7 @@ class ESJZone implements Plugin.PluginBase {
   name = 'ESJZone';
   icon = 'src/cn/esjzone/icon.png';
   site = 'https://www.esjzone.cc';
-  version = '2.3.0';
+  version = '2.4.0';
 
   // Enable WebView login for member-only content
   webStorageUtilized = true;
@@ -442,6 +442,62 @@ class ESJZone implements Plugin.PluginBase {
     if (body === '') return [];
 
     return this.parseNovelList(body);
+  }
+
+  async parseComments(path: string): Promise<Plugin.CommentItem[]> {
+    // Comments only appear on detail pages (/detail/xxx.html).
+    // Chapter/forum pages (/forum/xxx/yyy.html) have no comment section.
+    const url = this.site + path;
+    const body = await fetchText(url);
+    if (body === '') return [];
+
+    const $ = parseHTML(body);
+    const comments: Plugin.CommentItem[] = [];
+
+    $('section.comments-section .comment').each((_i, el) => {
+      const commentEl = $(el);
+
+      const author =
+        commentEl.find('.comment-title a').first().text().trim() ||
+        commentEl.find('.comment-title').first().text().trim() ||
+        '';
+
+      const dateMeta = commentEl
+        .find('.comment-meta')
+        .not('.comment-floor')
+        .first()
+        .text()
+        .trim();
+
+      const avatar =
+        commentEl.find('.lazyload-author-ava').first().attr('data-src') || '';
+
+      const quotedText = commentEl.find('blockquote p').text().trim();
+      const contentText = commentEl
+        .find('p.comment-text')
+        .first()
+        .text()
+        .trim();
+
+      const content = quotedText
+        ? `「${quotedText}」\n${contentText}`
+        : contentText;
+
+      if (content) {
+        comments.push({
+          author: author || '匿名',
+          content,
+          date: dateMeta || undefined,
+          avatar: avatar
+            ? avatar.startsWith('http')
+              ? avatar
+              : `${this.site}${avatar}`
+            : undefined,
+        });
+      }
+    });
+
+    return comments;
   }
 
   resolveUrl = (path: string) => this.site + path;
