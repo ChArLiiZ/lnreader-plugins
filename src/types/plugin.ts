@@ -35,6 +35,8 @@ export namespace Plugin {
     status?: string;
     /** Rating out of 5 as float */
     rating?: number;
+    /** Total word count */
+    wordCount?: number;
     chapters?: ChapterItem[];
   } & NovelItem;
 

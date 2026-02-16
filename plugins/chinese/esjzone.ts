@@ -288,6 +288,14 @@ class ESJZone implements Plugin.PluginBase {
             : NovelStatus.Ongoing;
         }
       }
+      // Extract word count (字數 / 總字數)
+      const wordCountMatch = text.match(/(?:字數|總字數)[:：]?\s*([\d,]+)/);
+      if (wordCountMatch) {
+        const count = parseInt(wordCountMatch[1].replace(/,/g, ''), 10);
+        if (!isNaN(count) && count > 0) {
+          novel.wordCount = count;
+        }
+      }
     });
 
     if (!novel.status) {
