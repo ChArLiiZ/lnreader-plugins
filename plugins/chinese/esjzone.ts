@@ -26,7 +26,6 @@ class ESJZone implements Plugin.PluginBase {
         .slice()
         .sort((a, b) => a.localeCompare(b, 'zh'))
         .map(t => ({ label: t, value: t }));
-      this.filters.tags.options = tagOptions;
       this.filters.customTag.options = tagOptions;
     }
   }
@@ -61,32 +60,40 @@ class ESJZone implements Plugin.PluginBase {
     return this.parseNovelList(body);
   }
 
-  /** Get all selected tags from filters (CheckboxGroup + custom autocomplete) */
-  private getSelectedTags(
+  /** Fetch list page by category/sort */
+  private async fetchListPage(
+    category: string,
+    sort: string,
+    pageNo: number,
+  ): Promise<Plugin.NovelItem[]> {
+    const listPath = `list-${category}${sort}`;
+    const url =
+      pageNo === 1
+        ? `${this.site}/${listPath}/`
+        : `${this.site}/${listPath}/${pageNo}.html`;
+    const body = await fetchText(url);
+    if (body === '') return [];
+    return this.parseNovelList(body);
+  }
+
+  /** Get selected tag from filters (single tag only) */
+  private getSelectedTag(
     filters?: Plugin.PopularNovelsOptions<typeof this.filters>['filters'],
-  ): string[] {
-    const tags: string[] = [];
-    const checkboxTags = filters?.tags?.value;
-    if (checkboxTags && Array.isArray(checkboxTags)) {
-      for (const t of checkboxTags) {
-        if (t && !tags.includes(t)) tags.push(t);
-      }
-    }
+  ): string | undefined {
     const customTag = filters?.customTag?.value as unknown;
     if (Array.isArray(customTag)) {
       for (const t of customTag) {
         const trimmed = typeof t === 'string' ? t.trim() : '';
-        if (trimmed && !tags.includes(trimmed)) tags.push(trimmed);
+        if (trimmed) return trimmed;
       }
     } else if (
       customTag &&
       typeof customTag === 'string' &&
       customTag.trim() !== ''
     ) {
-      const trimmed = customTag.trim();
-      if (!tags.includes(trimmed)) tags.push(trimmed);
+      return customTag.trim();
     }
-    return tags;
+    return undefined;
   }
 
   async popularNovels(
@@ -96,60 +103,26 @@ class ESJZone implements Plugin.PluginBase {
     // Refresh tag options from storage on each browse
     this.refreshTagOptions();
 
-    const selectedTags = this.getSelectedTags(filters);
+    const selectedTag = this.getSelectedTag(filters);
     const category = filters?.category?.value || '1';
     const sort = filters?.sort?.value || '1';
 
     // Tag-based browsing
-    if (selectedTags.length === 1) {
-      // Single tag: direct fetch with pagination support
-      return this.fetchTagPage(selectedTags[0], pageNo);
-    }
-
-    if (selectedTags.length > 1) {
-      // Multiple tags: fetch first page of each, then intersect by path
-      if (pageNo > 1) return []; // Multi-tag intersection only works on page 1
-
-      const results = await Promise.all(
-        selectedTags.map(tag => this.fetchTagPage(tag, 1)),
-      );
-
-      // Intersect: keep novels that appear in ALL tag results
-      const pathCountMap = new Map<
-        string,
-        { count: number; novel: Plugin.NovelItem }
-      >();
-      for (const novels of results) {
-        for (const novel of novels) {
-          const existing = pathCountMap.get(novel.path);
-          if (existing) {
-            existing.count++;
-          } else {
-            pathCountMap.set(novel.path, { count: 1, novel });
-          }
-        }
+    if (selectedTag) {
+      const tagNovels = await this.fetchTagPage(selectedTag, pageNo);
+      const isDefaultCategorySort = category === '1' && sort === '1';
+      if (isDefaultCategorySort) {
+        return tagNovels;
       }
 
-      const intersection: Plugin.NovelItem[] = [];
-      pathCountMap.forEach(({ count, novel }) => {
-        if (count === selectedTags.length) {
-          intersection.push(novel);
-        }
-      });
-      return intersection;
+      // ESJ tag pages don't expose category/sort directly.
+      // Intersect with list page so those filters still affect tag results.
+      const listNovels = await this.fetchListPage(category, sort, pageNo);
+      const listPathSet = new Set(listNovels.map(novel => novel.path));
+      return tagNovels.filter(novel => listPathSet.has(novel.path));
     }
 
-    // List page: /list-{category}{sort}/{page}.html
-    const listPath = `list-${category}${sort}`;
-    const url =
-      pageNo === 1
-        ? `${this.site}/${listPath}/`
-        : `${this.site}/${listPath}/${pageNo}.html`;
-
-    const body = await fetchText(url);
-    if (body === '') throw Error('無法獲取小說列表，請檢查網路');
-
-    const novels = this.parseNovelList(body);
+    const novels = await this.fetchListPage(category, sort, pageNo);
 
     // If no novels found in translated category, it likely requires login
     if (novels.length === 0 && category !== '2') {
@@ -347,7 +320,7 @@ class ESJZone implements Plugin.PluginBase {
     }
     if (tags.length > 0) {
       novel.genres = tags.join(',');
-      // Collect tags for the CheckboxGroup filter
+      // Collect tags for the autocomplete tag filter
       this.collectTags(tags);
     }
 
@@ -548,16 +521,11 @@ class ESJZone implements Plugin.PluginBase {
       ],
       type: FilterTypes.Picker,
     },
-    tags: {
-      label: '標籤（瀏覽小說後自動收集）',
-      value: [] as string[],
-      options: [] as { label: string; value: string }[],
-      type: FilterTypes.CheckboxGroup,
-    },
     customTag: {
-      label: '自訂標籤搜尋（多選＋自動完成）',
+      label: '自訂標籤搜尋（單選＋自動完成）',
       value: [] as string[],
       options: [] as { label: string; value: string }[],
+      maxSelections: 1,
       type: FilterTypes.AutocompleteMulti,
     },
   } satisfies Filters;

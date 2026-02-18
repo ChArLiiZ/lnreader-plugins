@@ -23,6 +23,11 @@ export function AutocompleteMultiFilter({
   set,
 }: AutocompleteMultiFilterProps) {
   const [query, setQuery] = useState('');
+  const maxSelections =
+    filter.filter.maxSelections !== undefined
+      ? filter.filter.maxSelections
+      : Number.POSITIVE_INFINITY;
+  const visibleValues = maxSelections === 1 ? value.slice(0, 1) : value;
   const selectedSet = useMemo(
     () => new Set(value.map(item => normalize(item))),
     [value],
@@ -51,7 +56,11 @@ export function AutocompleteMultiFilter({
       setQuery('');
       return;
     }
-    set([...value, tag]);
+    const nextValue =
+      maxSelections === 1
+        ? [tag]
+        : [...value, tag].slice(0, Math.max(1, maxSelections));
+    set(nextValue);
     setQuery('');
   };
 
@@ -78,9 +87,9 @@ export function AutocompleteMultiFilter({
         placeholder={`Search ${filter.filter.label.toLowerCase()}...`}
       />
 
-      {value.length > 0 ? (
+      {visibleValues.length > 0 ? (
         <div className="flex flex-wrap gap-2">
-          {value.map(tag => (
+          {visibleValues.map(tag => (
             <Badge key={tag} variant="secondary" className="gap-1">
               <span>{tag}</span>
               <button

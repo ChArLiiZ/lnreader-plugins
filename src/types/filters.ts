@@ -58,6 +58,8 @@ type ExcludableCheckboxFilter = {
 type AutocompleteMultiFilter = {
   type: FilterTypes.AutocompleteMulti;
   options: readonly FilterOption[];
+  /** Max number of selections allowed. Defaults to unlimited. */
+  maxSelections?: number;
   /** Default value */
   value: string[];
 };
