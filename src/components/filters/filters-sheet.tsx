@@ -19,6 +19,7 @@ import { SwitchFilter } from './switch-filter';
 import { TextFilter } from './text-filter';
 import { CheckboxFilter } from './checkbox-filter';
 import { ExcludableCheckboxFilter } from './excludable-checkbox-filter';
+import { AutocompleteMultiFilter } from './autocomplete-multi-filter';
 import { RotateCcw } from 'lucide-react';
 
 const renderFilters = (
@@ -129,7 +130,24 @@ const renderFilters = (
                 filter={{ key, filter }}
                 set={newValue => set(key, newValue)}
                 value={value}
-                key={`xcheсkbox_filter_${key}`}
+                key={`xcheckbox_filter_${key}`}
+              />
+            );
+          }
+          case FilterTypes.AutocompleteMulti: {
+            const value = values[key].value;
+            if (!isValueCorrectType(value, filter.value)) {
+              console.error(
+                `FilterValue for filter [${key}] has a wrong type!`,
+              );
+              return null;
+            }
+            return (
+              <AutocompleteMultiFilter
+                filter={{ key, filter }}
+                set={newValue => set(key, newValue)}
+                value={value}
+                key={`autocomplete_multi_filter_${key}`}
               />
             );
           }

@@ -15,6 +15,7 @@ export enum FilterTypes {
   CheckboxGroup = 'Checkbox',
   Switch = 'Switch',
   ExcludableCheckboxGroup = 'XCheckbox',
+  AutocompleteMulti = 'AutocompleteMulti',
 }
 
 type SwitchFilter = {
@@ -54,6 +55,13 @@ type ExcludableCheckboxFilter = {
   };
 };
 
+type AutocompleteMultiFilter = {
+  type: FilterTypes.AutocompleteMulti;
+  options: readonly FilterOption[];
+  /** Default value */
+  value: string[];
+};
+
 /**
  * key - filter pairs
  */
@@ -66,6 +74,7 @@ type FilterFromType = {
   [FilterTypes.Picker]: PickerFilter;
   [FilterTypes.Switch]: SwitchFilter;
   [FilterTypes.TextInput]: TextFilter;
+  [FilterTypes.AutocompleteMulti]: AutocompleteMultiFilter;
 };
 
 /**
@@ -105,7 +114,9 @@ export type ValueOfFilter<T extends FilterTypes> =
           ? TextFilter['value']
           : T extends FilterTypes.ExcludableCheckboxGroup
             ? ExcludableCheckboxFilter['value']
-            : never;
+            : T extends FilterTypes.AutocompleteMulti
+              ? AutocompleteMultiFilter['value']
+              : never;
 
 /** Get {@link Filter}'s type */
 export type FilterType<T extends { type: unknown }> = T extends {

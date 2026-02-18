@@ -13,7 +13,7 @@ class ESJZone implements Plugin.PluginBase {
   name = 'ESJZone';
   icon = 'src/cn/esjzone/icon.png';
   site = 'https://www.esjzone.cc';
-  version = '2.5.0';
+  version = '2.5.1';
 
   // Enable WebView login for member-only content
   webStorageUtilized = true;
@@ -22,10 +22,12 @@ class ESJZone implements Plugin.PluginBase {
   private refreshTagOptions(): void {
     const saved: string[] = storage.get(COLLECTED_TAGS_KEY) || [];
     if (saved.length > 0) {
-      this.filters.tags.options = saved
+      const tagOptions = saved
         .slice()
         .sort((a, b) => a.localeCompare(b, 'zh'))
         .map(t => ({ label: t, value: t }));
+      this.filters.tags.options = tagOptions;
+      this.filters.customTag.options = tagOptions;
     }
   }
 
@@ -59,7 +61,7 @@ class ESJZone implements Plugin.PluginBase {
     return this.parseNovelList(body);
   }
 
-  /** Get all selected tags from filters (CheckboxGroup + custom TextInput) */
+  /** Get all selected tags from filters (CheckboxGroup + custom autocomplete) */
   private getSelectedTags(
     filters?: Plugin.PopularNovelsOptions<typeof this.filters>['filters'],
   ): string[] {
@@ -70,8 +72,17 @@ class ESJZone implements Plugin.PluginBase {
         if (t && !tags.includes(t)) tags.push(t);
       }
     }
-    const customTag = filters?.customTag?.value;
-    if (customTag && typeof customTag === 'string' && customTag.trim() !== '') {
+    const customTag = filters?.customTag?.value as unknown;
+    if (Array.isArray(customTag)) {
+      for (const t of customTag) {
+        const trimmed = typeof t === 'string' ? t.trim() : '';
+        if (trimmed && !tags.includes(trimmed)) tags.push(trimmed);
+      }
+    } else if (
+      customTag &&
+      typeof customTag === 'string' &&
+      customTag.trim() !== ''
+    ) {
       const trimmed = customTag.trim();
       if (!tags.includes(trimmed)) tags.push(trimmed);
     }
@@ -544,9 +555,10 @@ class ESJZone implements Plugin.PluginBase {
       type: FilterTypes.CheckboxGroup,
     },
     customTag: {
-      label: '自訂標籤搜尋',
-      value: '',
-      type: FilterTypes.TextInput,
+      label: '自訂標籤搜尋（多選＋自動完成）',
+      value: [] as string[],
+      options: [] as { label: string; value: string }[],
+      type: FilterTypes.AutocompleteMulti,
     },
   } satisfies Filters;
 }
