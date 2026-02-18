@@ -302,22 +302,21 @@ class ESJZone implements Plugin.PluginBase {
     }
 
     // Tags / Genres
-    const tags: string[] = [];
+    const tagSet = new Set<string>();
     $('section.widget-tags a.tag').each((_i, el) => {
       const tagText = $(el).text().trim();
-      if (tagText) tags.push(tagText);
+      if (tagText) tagSet.add(tagText);
     });
-    if (tags.length === 0) {
+    if (tagSet.size === 0) {
       $('a.tag').each((_i, el) => {
         const href = $(el).attr('href') || '';
         if (href.startsWith('/tags/')) {
           const tagText = $(el).text().trim();
-          if (tagText && !tags.includes(tagText)) {
-            tags.push(tagText);
-          }
+          if (tagText) tagSet.add(tagText);
         }
       });
     }
+    const tags = Array.from(tagSet);
     if (tags.length > 0) {
       novel.genres = tags.join(',');
       // Collect tags for the autocomplete tag filter
