@@ -13,7 +13,7 @@ class ESJZone implements Plugin.PluginBase {
   name = 'ESJZone';
   icon = 'src/cn/esjzone/icon.png';
   site = 'https://www.esjzone.cc';
-  version = '2.5.1';
+  version = '2.5.2';
 
   // Enable WebView login for member-only content
   webStorageUtilized = true;
