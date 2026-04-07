@@ -17,7 +17,7 @@ class LinovelibTw implements Plugin.PluginBase {
   name = 'Linovelib TW';
   icon = 'src/cn/linovelib/icon.png';
   site = 'https://tw.linovelib.com';
-  version = '1.2.0';
+  version = '1.3.0';
   imageRequestInit?: Plugin.ImageRequestInit = {
     method: 'GET',
     headers: {
@@ -479,26 +479,26 @@ class LinovelibTw implements Plugin.PluginBase {
 
   filters = {
     rank: {
-      label: 'Ranking',
+      label: '排行榜',
       value: 'monthvisit',
       options: [
-        { label: 'Monthly Views', value: 'monthvisit' },
-        { label: 'Weekly Views', value: 'weekvisit' },
-        { label: 'Monthly Votes', value: 'monthvote' },
-        { label: 'Weekly Votes', value: 'weekvote' },
-        { label: 'Monthly Flowers', value: 'monthflower' },
-        { label: 'Weekly Flowers', value: 'weekflower' },
-        { label: 'Monthly Eggs', value: 'monthegg' },
-        { label: 'Weekly Eggs', value: 'weekegg' },
-        { label: 'Latest Update', value: 'lastupdate' },
-        { label: 'New Arrivals', value: 'postdate' },
-        { label: 'Rating', value: 'goodnum' },
-        { label: 'Trending', value: 'newhot' },
+        { label: '月點擊榜（瀏覽量）', value: 'monthvisit' },
+        { label: '周點擊榜（瀏覽量）', value: 'weekvisit' },
+        { label: '月推薦榜（推薦票）', value: 'monthvote' },
+        { label: '周推薦榜（推薦票）', value: 'weekvote' },
+        { label: '月鮮花榜（正向支持）', value: 'monthflower' },
+        { label: '周鮮花榜（正向支持）', value: 'weekflower' },
+        { label: '月雞蛋榜（反向評價）', value: 'monthegg' },
+        { label: '周雞蛋榜（反向評價）', value: 'weekegg' },
+        { label: '最近更新', value: 'lastupdate' },
+        { label: '最新入庫', value: 'postdate' },
+        { label: '收藏數', value: 'goodnum' },
+        { label: '近期熱門', value: 'newhot' },
       ],
       type: FilterTypes.Picker,
     },
     customTag: {
-      label: 'Tag',
+      label: '標籤',
       value: [] as string[],
       options: [] as TagOption[],
       type: FilterTypes.AutocompleteMulti,
