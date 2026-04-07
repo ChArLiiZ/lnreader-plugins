@@ -18,6 +18,16 @@ class LinovelibTw implements Plugin.PluginBase {
   icon = 'src/cn/linovelib/icon.png';
   site = 'https://tw.linovelib.com';
   version = '1.2.0';
+  imageRequestInit?: Plugin.ImageRequestInit = {
+    method: 'GET',
+    headers: {
+      'User-Agent':
+        'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/135.0.0.0 Safari/537.36',
+      Referer: 'https://tw.linovelib.com/',
+      Accept:
+        'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+    },
+  };
 
   private refreshTagOptions(): void {
     const saved = this.getStoredTagMap();
@@ -158,6 +168,27 @@ class LinovelibTw implements Plugin.PluginBase {
     return this.parseNovelList(body);
   }
 
+  private applyRankToTagPath(
+    tagPath: string,
+    rank: string,
+    pageNo: number,
+  ): string {
+    const normalizedPath = this.cleanText(tagPath);
+    if (!normalizedPath.includes('/wenku/')) {
+      return normalizedPath;
+    }
+
+    const match = normalizedPath.match(
+      /\/wenku\/([^_/]+)_(\d+)_0_0_0_0_0_0_(\d+)_0\.html$/,
+    );
+    if (!match) {
+      return normalizedPath;
+    }
+
+    const tagId = match[2];
+    return `/wenku/${rank}_${tagId}_0_0_0_0_0_0_${pageNo}_0.html`;
+  }
+
   private async warmTagOptions(novels: Plugin.NovelItem[]): Promise<void> {
     const storedCount = Object.keys(this.getStoredTagMap()).length;
     if (storedCount >= 12) return;
@@ -200,18 +231,19 @@ class LinovelibTw implements Plugin.PluginBase {
   ): Promise<Plugin.NovelItem[]> {
     this.refreshTagOptions();
 
+    const rank = showLatestNovels ? 'postdate' : filters.rank.value;
     const selectedTagPath = this.getSelectedTagPath(filters);
     if (selectedTagPath) {
-      const tagNovels = await this.fetchTagPage(selectedTagPath, pageNo);
+      const tagNovels = await this.fetchTagPage(
+        this.applyRankToTagPath(selectedTagPath, rank, pageNo),
+        pageNo,
+      );
       if (tagNovels.length > 0) {
         return tagNovels;
       }
     }
 
-    const rank = showLatestNovels ? 'lastupdate' : filters.rank.value;
-    const url = showLatestNovels
-      ? `${this.site}/wenku/postdate_0_0_0_0_0_0_0_${pageNo}_0.html`
-      : `${this.site}/top/${rank}/${pageNo}.html`;
+    const url = `${this.site}/wenku/${rank}_0_0_0_0_0_0_0_${pageNo}_0.html`;
 
     const body = await this.fetchPage(url);
     const novels = this.parseNovelList(body);
