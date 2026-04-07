@@ -1,15 +1,195 @@
-import { CheerioAPI, load as parseHTML } from 'cheerio';
+import { load as parseHTML } from 'cheerio';
 import { fetchText } from '@libs/fetch';
 import { FilterTypes, Filters } from '@libs/filterInputs';
 import { Plugin } from '@/types/plugin';
 import { NovelStatus } from '@libs/novelStatus';
+import { defaultCover } from '@libs/defaultCover';
+import { storage } from '@libs/storage';
 
-class Linovelib_tw implements Plugin.PluginBase {
+type NovelListItem = Plugin.NovelItem & { genres?: string };
+type TagOption = { label: string; value: string };
+type StoredTagMap = Record<string, string>;
+
+const COLLECTED_TAGS_KEY = 'linovelib_tw_collected_tags';
+
+class LinovelibTw implements Plugin.PluginBase {
   id = 'linovelib_tw';
-  name = 'Linovelib(繁體)';
+  name = 'Linovelib TW';
   icon = 'src/cn/linovelib/icon.png';
-  site = 'https://tw.linovelib.com/';
-  version = '1.0.0';
+  site = 'https://tw.linovelib.com';
+  version = '1.2.0';
+
+  private refreshTagOptions(): void {
+    const saved = this.getStoredTagMap();
+    this.filters.customTag.options = Object.entries(saved)
+      .sort(([left], [right]) => left.localeCompare(right, 'zh-Hant'))
+      .map(([label, value]) => ({ label, value }));
+  }
+
+  private getStoredTagMap(): StoredTagMap {
+    return (storage.get(COLLECTED_TAGS_KEY) as StoredTagMap | undefined) || {};
+  }
+
+  private collectTags(tags: TagOption[]): void {
+    if (tags.length === 0) return;
+
+    const saved = this.getStoredTagMap();
+    let changed = false;
+
+    tags.forEach(tag => {
+      const label = this.cleanText(tag.label);
+      const value = this.cleanText(tag.value);
+      if (!label || !value) return;
+      if (saved[label] === value) return;
+
+      saved[label] = value;
+      changed = true;
+    });
+
+    if (changed) {
+      storage.set(COLLECTED_TAGS_KEY, saved);
+      this.refreshTagOptions();
+    }
+  }
+
+  private getSelectedTagPath(
+    filters?: Plugin.PopularNovelsOptions<typeof this.filters>['filters'],
+  ): string | undefined {
+    const customTag = filters?.customTag?.value as unknown;
+    if (Array.isArray(customTag)) {
+      const selected = customTag.find(
+        value => typeof value === 'string' && value.trim() !== '',
+      );
+      return typeof selected === 'string' ? selected.trim() : undefined;
+    }
+    if (typeof customTag === 'string' && customTag.trim() !== '') {
+      return customTag.trim();
+    }
+    return undefined;
+  }
+
+  private makeAbsolute(url?: string | null): string {
+    if (!url) return defaultCover;
+    if (url.startsWith('//')) return `https:${url}`;
+    if (url.startsWith('http://') || url.startsWith('https://')) return url;
+    if (url.startsWith('/')) return `${this.site}${url}`;
+    return `${this.site}/${url}`;
+  }
+
+  private cleanText(text?: string | null): string {
+    return text?.replace(/\s+/g, ' ').trim() || '';
+  }
+
+  private parseWordCount(text: string): number | undefined {
+    const normalized = this.cleanText(text);
+    const match = normalized.match(/([\d.]+)\s*([萬亿億千]?)字?/);
+    if (!match) return undefined;
+
+    const value = parseFloat(match[1]);
+    if (Number.isNaN(value)) return undefined;
+
+    const unit = match[2];
+    if (unit === '萬') return Math.round(value * 10000);
+    if (unit === '亿' || unit === '億') return Math.round(value * 100000000);
+    if (unit === '千') return Math.round(value * 1000);
+    return Math.round(value);
+  }
+
+  private parseTagNames(text: string): string[] {
+    return this.cleanText(text)
+      .split(/\s+/)
+      .map(tag => tag.trim())
+      .filter(Boolean);
+  }
+
+  private parseNovelList(body: string): Plugin.NovelItem[] {
+    const $ = parseHTML(body);
+    const novels: Plugin.NovelItem[] = [];
+
+    $(
+      '.book-ol .book-li a.book-layout, .module-rank-booklist .book-li a.book-layout',
+    ).each((_i, el) => {
+      const itemEl = $(el);
+      const path = itemEl.attr('href');
+      if (!path) return;
+
+      const cover =
+        itemEl.find('.book-cover img').attr('data-src') ||
+        itemEl.find('.book-cover img').attr('src');
+      const rating = this.cleanText(itemEl.find('.corner em').text());
+      const wordText = this.cleanText(itemEl.find('.tag-small.blue').text());
+      const tags = this.parseTagNames(itemEl.find('.tag-small.yellow').text());
+
+      const infoParts: string[] = [];
+      if (rating) infoParts.push(`★${rating}`);
+      if (wordText) infoParts.push(`${wordText}字`);
+
+      const novel: NovelListItem = {
+        name: this.cleanText(itemEl.find('.book-title').text()),
+        path,
+        cover: this.makeAbsolute(cover),
+      };
+
+      const author = this.cleanText(itemEl.find('.book-author').text());
+      if (infoParts.length > 0) {
+        novel.info = infoParts.join(' | ');
+      } else if (author) {
+        novel.info = author;
+      }
+
+      if (tags.length > 0) {
+        novel.genres = tags.join(',');
+      }
+
+      novels.push(novel);
+    });
+
+    return novels;
+  }
+
+  private async fetchTagPage(
+    tagPath: string,
+    pageNo: number,
+  ): Promise<Plugin.NovelItem[]> {
+    if (!tagPath) return [];
+
+    const pagedPath = tagPath.replace(/_(\d+)_0\.html$/, `_${pageNo}_0.html`);
+    const body = await this.fetchPage(this.makeAbsolute(pagedPath));
+    return this.parseNovelList(body);
+  }
+
+  private async warmTagOptions(novels: Plugin.NovelItem[]): Promise<void> {
+    const storedCount = Object.keys(this.getStoredTagMap()).length;
+    if (storedCount >= 12) return;
+
+    const targets = novels.slice(0, 3);
+    for (const novel of targets) {
+      try {
+        const body = await this.fetchPage(this.makeAbsolute(novel.path));
+        const $ = parseHTML(body);
+        const tags = $('#bookDetailWrapper .tag-small a')
+          .map((_i, el) => ({
+            label: this.cleanText($(el).text()),
+            value: this.cleanText($(el).attr('href')),
+          }))
+          .toArray()
+          .filter(tag => tag.label && tag.value);
+        this.collectTags(tags);
+      } catch {
+        // Ignore warm-up failures and keep the list usable.
+      }
+    }
+  }
+
+  private async fetchPage(url: string): Promise<string> {
+    const body = await fetchText(url, {
+      headers: {
+        Referer: this.site,
+      },
+    });
+    if (body === '') throw new Error(`Failed to fetch ${url}`);
+    return body;
+  }
 
   async popularNovels(
     pageNo: number,
@@ -18,529 +198,252 @@ class Linovelib_tw implements Plugin.PluginBase {
       filters,
     }: Plugin.PopularNovelsOptions<typeof this.filters>,
   ): Promise<Plugin.NovelItem[]> {
+    this.refreshTagOptions();
+
+    const selectedTagPath = this.getSelectedTagPath(filters);
+    if (selectedTagPath) {
+      const tagNovels = await this.fetchTagPage(selectedTagPath, pageNo);
+      if (tagNovels.length > 0) {
+        return tagNovels;
+      }
+    }
+
     const rank = showLatestNovels ? 'lastupdate' : filters.rank.value;
-    const url = `${this.site}/top/${rank}/${pageNo}.html`;
+    const url = showLatestNovels
+      ? `${this.site}/wenku/postdate_0_0_0_0_0_0_0_${pageNo}_0.html`
+      : `${this.site}/top/${rank}/${pageNo}.html`;
 
-    const body = await fetchText(url);
-    if (body === '') throw Error('無法獲取小説列表, 請檢查網絡');
-
-    const loadedCheerio = parseHTML(body);
-
-    const novels: Plugin.NovelItem[] = [];
-
-    loadedCheerio('.module-rank-booklist .book-layout').each((i, el) => {
-      const url = loadedCheerio(el).attr('href');
-
-      const novelName = loadedCheerio(el).find('.book-title').text();
-      const novelCover = loadedCheerio(el)
-        .find('div.book-cover > img')
-        .attr('data-src');
-      if (!url) return;
-
-      const novel = {
-        name: novelName,
-        cover: novelCover,
-        path: url,
-      };
-
-      novels.push(novel);
-    });
-
+    const body = await this.fetchPage(url);
+    const novels = this.parseNovelList(body);
+    await this.warmTagOptions(novels);
     return novels;
   }
 
   async parseNovel(novelPath: string): Promise<Plugin.SourceNovel> {
-    const url = this.site + novelPath;
-
-    const body = await fetchText(url);
-    if (body === '') throw Error('無法獲取小説信息, 請檢查網絡');
-
-    const loadedCheerio = parseHTML(body);
+    const body = await this.fetchPage(this.makeAbsolute(novelPath));
+    const $ = parseHTML(body);
 
     const novel: Plugin.SourceNovel = {
       path: novelPath,
       chapters: [],
-      name: loadedCheerio('#bookDetailWrapper .book-title').text(),
+      name: this.cleanText($('#bookDetailWrapper .book-title').first().text()),
+      cover: this.makeAbsolute(
+        $('#bookDetailWrapper img.book-cover').attr('src') ||
+          $('#bookDetailWrapper img.book-cover').attr('data-src'),
+      ),
+      summary: this.cleanText(
+        $('#bookSummary .content, #bookSummary').first().text(),
+      ),
+      author: this.cleanText(
+        $('#bookDetailWrapper .authorname a').first().text(),
+      ),
     };
 
-    novel.cover = loadedCheerio('#bookDetailWrapper img.book-cover').attr(
-      'src',
+    const translator = this.cleanText(
+      $('#bookDetailWrapper .book-rand-a a').eq(1).text(),
     );
+    if (translator) {
+      novel.artist = translator;
+    }
 
-    novel.summary = loadedCheerio('#bookSummary content').text();
-
-    novel.author = loadedCheerio('#bookDetailWrapper .book-rand-a a').text();
-
-    const meta = loadedCheerio('#bookDetailWrapper .book-meta').text();
-    novel.status = meta.includes('完結')
+    const metaText = this.cleanText(
+      $('#bookDetailWrapper .book-meta.book-layout-inline').last().text(),
+    );
+    novel.status = metaText.includes('完結')
       ? NovelStatus.Completed
       : NovelStatus.Ongoing;
 
-    novel.genres = loadedCheerio('.tag-small.red')
-      .children('a')
-      .map((i, el) => loadedCheerio(el).text())
+    const ratingText = this.cleanText($('.score-num').first().text());
+    if (ratingText) {
+      const rating = parseFloat(ratingText);
+      if (!Number.isNaN(rating)) {
+        novel.rating = rating;
+      }
+    }
+
+    const wordMeta = metaText
+      .split('|')
+      .map(part => this.cleanText(part))
+      .find(part => part.includes('字'));
+    if (wordMeta) {
+      novel.wordCount = this.parseWordCount(wordMeta);
+    }
+
+    const tags = $('#bookDetailWrapper .tag-small a')
+      .map((_i, el) => ({
+        label: this.cleanText($(el).text()),
+        value: this.cleanText($(el).attr('href')),
+      }))
       .toArray()
-      .join(',');
+      .filter(tag => tag.label && tag.value);
+    this.collectTags(tags);
 
-    // Table of Content is on a different page than the summary page
-    const chapter: Plugin.ChapterItem[] = [];
+    const tagLabels = tags.map(tag => tag.label);
+    if (tagLabels.length > 0) {
+      novel.genres = tagLabels.join(',');
+    }
 
-    const idPattern = /\/(\d+)\.html/;
-    const novelId = url.match(idPattern)?.[1];
+    const catalogPath = $('#btnReadBook').attr('href');
+    if (!catalogPath) {
+      return novel;
+    }
 
-    const chaptersUrl = this.site + loadedCheerio('#btnReadBook').attr('href');
-    const chaptersBody = await fetchText(chaptersUrl);
+    const catalogBody = await this.fetchPage(this.makeAbsolute(catalogPath));
+    const chapters$ = parseHTML(catalogBody);
+    let volumeName = '';
+    let chapterNumber = 0;
 
-    const chaptersLoadedCheerio = parseHTML(chaptersBody);
+    chapters$('#volumes .chapter-li').each((_i, el) => {
+      const row = chapters$(el);
+      if (row.hasClass('chapter-bar')) {
+        volumeName = this.cleanText(row.find('h3').text());
+        return;
+      }
+      if (row.hasClass('volume-cover')) {
+        return;
+      }
 
-    let volumeName: string, chapterId: number;
+      const link = row.find('a.chapter-li-a');
+      const path = link.attr('href');
+      if (!path) return;
 
-    chaptersLoadedCheerio('#volumes .chapter-li:not(.volume-cover)').each(
-      (i, el) => {
-        if (chaptersLoadedCheerio(el).hasClass('chapter-bar')) {
-          volumeName = chaptersLoadedCheerio(el).text();
-          return;
-        } else {
-          const urlPart = chaptersLoadedCheerio(el)
-            .find('.chapter-li-a')
-            .attr('href');
-          const chapterIdMatch = urlPart?.match(idPattern);
+      const chapterTitle = this.cleanText(row.find('.chapter-index').text());
+      if (!chapterTitle) return;
 
-          // Sometimes the href attribute does not contain the url, but javascript:cid(0).
-          // Increment the previous chapter ID should result in the right URL
-          if (chapterIdMatch) {
-            chapterId = +chapterIdMatch[1];
-          } else {
-            chapterId++;
-          }
-        }
-
-        const chapterUrl = `/novel/${novelId}/${chapterId}.html`;
-        const chapterName =
-          volumeName +
-          ' — ' +
-          chaptersLoadedCheerio(el).find('.chapter-index').text().trim();
-        const releaseDate = null;
-
-        if (!chapterId) return;
-
-        chapter.push({
-          name: chapterName,
-          releaseTime: releaseDate,
-          path: chapterUrl,
-        });
-      },
-    );
-
-    novel.chapters = chapter;
+      chapterNumber += 1;
+      novel.chapters.push({
+        name: volumeName ? `${volumeName} ${chapterTitle}` : chapterTitle,
+        path,
+        chapterNumber,
+      });
+    });
 
     return novel;
   }
 
   async parseChapter(chapterPath: string): Promise<string> {
-    let chapterName,
-      chapterText = '',
-      hasNextPage,
-      pageHasNextPage,
-      pageText = '';
-    let pageNumber = 1;
+    const body = await this.fetchPage(this.makeAbsolute(chapterPath));
+    const $ = parseHTML(body);
+    const content = $('#acontent');
 
-    /*
-     * TODO: Maybe there are other ways to get the translation table
-     * It is embed and encrypted inside readtool.js
-     * UPDATE: Decrypted, see skillgg
-     */
-    // const mapping_dict = {
-    //   '“': '「',
-    //   '’': '』',
-    //   '': '是',
-    //   '': '不',
-    //   '': '好',
-    //   '': '个',
-    //   '': '开',
-    //   '': '样',
-    //   '': '想',
-    //   '': '说',
-    //   '': '年',
-    //   '': '那',
-    //   '': '她',
-    //   '': '美',
-    //   '': '自',
-    //   '': '家',
-    //   '': '而',
-    //   '': '去',
-    //   '': '都',
-    //   '': '于',
-    //   '': '舔',
-    //   '': '他',
-    //   '': '只',
-    //   '': '看',
-    //   '': '来',
-    //   '': '用',
-    //   '': '道',
-    //   '': '得',
-    //   '': '乳',
-    //   '': '茎',
-    //   '': '肉',
-    //   '': '胸',
-    //   '': '淫',
-    //   '': '性',
-    //   '': '骚',
-    //   '”': '」',
-    //   '': '的',
-    //   '': '当',
-    //   '': '人',
-    //   '': '有',
-    //   '': '上',
-    //   '': '到',
-    //   '': '地',
-    //   '': '中',
-    //   '': '生',
-    //   '': '着',
-    //   '': '和',
-    //   '': '起',
-    //   '': '交',
-    //   '': '以',
-    //   '': '可',
-    //   '': '过',
-    //   '': '能',
-    //   '': '多',
-    //   '': '心',
-    //   '': '小',
-    //   '': '成',
-    //   '': '了',
-    //   '': '把',
-    //   '': '发',
-    //   '': '第',
-    //   '': '子',
-    //   '': '事',
-    //   '': '阴',
-    //   '': '欲',
-    //   '': '里',
-    //   '': '私',
-    //   '': '臀',
-    //   '': '脱',
-    //   '': '唇',
-    //   '‘': '『',
-    //   '': '一',
-    //   '': '我',
-    //   '': '在',
-    //   '': '这',
-    //   '': '们',
-    //   '': '时',
-    //   '': '为',
-    //   '': '你',
-    //   '': '国',
-    //   '': '就',
-    //   '': '要',
-    //   '': '也',
-    //   '': '后',
-    //   '': '没',
-    //   '': '下',
-    //   '': '天',
-    //   '': '对',
-    //   '': '然',
-    //   '': '学',
-    //   '': '之',
-    //   '': '出',
-    //   '': '没',
-    //   '': '如',
-    //   '': '还',
-    //   '': '大',
-    //   '': '作',
-    //   '': '种',
-    //   '': '液',
-    //   '': '呻',
-    //   '': '射',
-    //   '': '穴',
-    //   '': '么',
-    //   '': '裸',
-    // };
-    const skillgg: Record<string, string> = {
-      '\u201c': '\u300c',
-      '\u201d': '\u300d',
-      '\u2018': '\u300e',
-      '\u2019': '\u300f',
-      '\ue82c': '\u7684',
-      '\ue852': '\u4e00',
-      '\ue82d': '\u662f',
-      '\ue819': '\u4e86',
-      '\ue856': '\u6211',
-      '\ue857': '\u4e0d',
-      '\ue816': '\u4eba',
-      '\ue83c': '\u5728',
-      '\ue830': '\u4ed6',
-      '\ue82e': '\u6709',
-      '\ue836': '\u8fd9',
-      '\ue859': '\u4e2a',
-      '\ue80a': '\u4e0a',
-      '\ue855': '\u4eec',
-      '\ue842': '\u6765',
-      '\ue858': '\u5230',
-      '\ue80b': '\u65f6',
-      '\ue81f': '\u5927',
-      '\ue84a': '\u5730',
-      '\ue853': '\u4e3a',
-      '\ue81e': '\u5b50',
-      '\ue822': '\u4e2d',
-      '\ue813': '\u4f60',
-      '\ue85b': '\u8bf4',
-      '\ue807': '\u751f',
-      '\ue818': '\u56fd',
-      '\ue810': '\u5e74',
-      '\ue812': '\u7740',
-      '\ue851': '\u5c31',
-      '\ue801': '\u90a3',
-      '\ue80c': '\u548c',
-      '\ue815': '\u8981',
-      '\ue84c': '\u5979',
-      '\ue840': '\u51fa',
-      '\ue848': '\u4e5f',
-      '\ue835': '\u5f97',
-      '\ue800': '\u91cc',
-      '\ue826': '\u540e',
-      '\ue863': '\u81ea',
-      '\ue861': '\u4ee5',
-      '\ue854': '\u4f1a',
-      '\ue827': '\u5bb6',
-      '\ue83b': '\u53ef',
-      '\ue85d': '\u4e0b',
-      '\ue84d': '\u800c',
-      '\ue862': '\u8fc7',
-      '\ue81c': '\u5929',
-      '\ue81d': '\u53bb',
-      '\ue860': '\u80fd',
-      '\ue843': '\u5bf9',
-      '\ue82f': '\u5c0f',
-      '\ue802': '\u591a',
-      '\ue831': '\u7136',
-      '\ue84b': '\u4e8e',
-      '\ue837': '\u5fc3',
-      '\ue829': '\u5b66',
-      '\ue85e': '\u4e48',
-      '\ue83a': '\u4e4b',
-      '\ue832': '\u90fd',
-      '\ue808': '\u597d',
-      '\ue841': '\u770b',
-      '\ue821': '\u8d77',
-      '\ue845': '\u53d1',
-      '\ue803': '\u5f53',
-      '\ue828': '\u6ca1',
-      '\ue81b': '\u6210',
-      '\ue83e': '\u53ea',
-      '\ue820': '\u5982',
-      '\ue84e': '\u4e8b',
-      '\ue85a': '\u628a',
-      '\ue806': '\u8fd8',
-      '\ue83f': '\u7528',
-      '\ue833': '\u7b2c',
-      '\ue811': '\u6837',
-      '\ue804': '\u9053',
-      '\ue814': '\u60f3',
-      '\ue80f': '\u4f5c',
-      '\ue84f': '\u79cd',
-      '\ue80e': '\u5f00',
-      '\ue823': '\u7f8e',
-      '\ue849': '\u4e73',
-      '\ue805': '\u9634',
-      '\ue809': '\u6db2',
-      '\ue81a': '\u830e',
-      '\ue844': '\u6b32',
-      '\ue847': '\u547b',
-      '\ue850': '\u8089',
-      '\ue824': '\u4ea4',
-      '\ue85f': '\u6027',
-      '\ue817': '\u80f8',
-      '\ue85c': '\u79c1',
-      '\ue838': '\u7a74',
-      '\ue82a': '\u6deb',
-      '\ue83d': '\u81c0',
-      '\ue82b': '\u8214',
-      '\ue80d': '\u5c04',
-      '\ue839': '\u8131',
-      '\ue834': '\u88f8',
-      '\ue846': '\u9a9a',
-      '\ue825': '\u5507',
-    };
-    const addPage = async (pageCheerio: CheerioAPI) => {
-      const formatPage = async () => {
-        // Remove JS and notice of the website
-        pageCheerio('div.cgo, center').remove();
-
-        // Load lazyloaded images
-        pageCheerio('#acontentl img.imagecontent').each((i, el) => {
-          // Sometimes images are either in data-src or src
-          const imgSrc =
-            pageCheerio(el).attr('data-src') || pageCheerio(el).attr('src');
-          if (imgSrc) {
-            // Clean up img element
-            pageCheerio(el)
-              .attr('src', imgSrc)
-              .removeAttr('data-src')
-              .removeClass('lazyload');
-          }
-        });
-
-        // Recover the original character
-        pageText = pageCheerio('#acontentl').html() || '';
-        pageText = pageText.replace(/./g, char => skillgg[char] || char);
-
-        return Promise.resolve();
-      };
-
-      await formatPage();
-      chapterName =
-        pageCheerio('#atitle + h3').text() +
-        ' — ' +
-        pageCheerio('#atitle').text();
-      if (chapterText === '') {
-        chapterText = '<h2>' + chapterName + '</h2>';
+    content.find('script, .cgo').remove();
+    content.find('center').each((_i, el) => {
+      const text = this.cleanText($(el).text());
+      if (text.includes('暫不支持') || text.includes('請使用手機閱讀')) {
+        $(el).remove();
       }
-      chapterText += pageText;
-    };
+    });
 
-    const loadPage = async (url: string) => {
-      const headers = {
-        'Accept':
-          'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
-        'Accept-Language':
-          'zh-CN,zh;q=0.9,zh-TW;q=0.8,zh-HK;q=0.7,en;q=0.6,en-GB;q=0.5,en-US;q=0.4',
-        'Cache-Control': 'no-cache',
-      };
-
-      const body = await fetchText(url, { headers });
-      const pageCheerio = parseHTML(body);
-      await addPage(pageCheerio);
-      pageHasNextPage =
-        pageCheerio('#footlink a:last').text() === '下一页' ||
-        pageCheerio('#footlink a:last').text() === '下一頁'
-          ? true
-          : false;
-      return { pageCheerio, pageHasNextPage };
-    };
-
-    let url = this.site + chapterPath;
-    const baseUrl = url;
-    do {
-      const page = await loadPage(url);
-      hasNextPage = page.pageHasNextPage;
-      if (hasNextPage === true) {
-        pageNumber++;
-        url = baseUrl.replace(/\.html/gi, `_${pageNumber}` + '.html');
+    content.find('img.imagecontent').each((_i, el) => {
+      const src = $(el).attr('data-src') || $(el).attr('src');
+      if (src) {
+        $(el)
+          .attr('src', this.makeAbsolute(src))
+          .removeAttr('data-src')
+          .removeClass('lazyload');
       }
-    } while (hasNextPage === true);
-    return chapterText;
+    });
+
+    const title = this.cleanText($('#atitle + h3').text());
+    const chapterTitle = this.cleanText($('#atitle').text());
+    const chapterName = [title, chapterTitle].filter(Boolean).join(' ');
+    const html = content.html()?.trim() || '';
+
+    return chapterName ? `<h2>${chapterName}</h2>${html}` : html;
   }
 
   async searchNovels(
     searchTerm: string,
     pageNo: number,
   ): Promise<Plugin.NovelItem[]> {
-    const url = `${this.site}/search/${encodeURI(searchTerm)}_${pageNo}.html`;
+    this.refreshTagOptions();
 
-    const body = await fetchText(url);
-    if (body === '') throw Error('無法獲取搜索結果, 請檢查網絡');
+    const storedTagPath = this.getStoredTagMap()[searchTerm];
+    const tagNovels = storedTagPath
+      ? await this.fetchTagPage(storedTagPath, pageNo)
+      : [];
+    if (tagNovels.length > 0) {
+      return tagNovels;
+    }
 
-    const pageCheerio = parseHTML(body);
+    const searchUrl = `${this.site}/search/${encodeURI(searchTerm)}_${pageNo}.html`;
 
-    const novels: Plugin.NovelItem[] = [];
+    try {
+      const body = await this.fetchPage(searchUrl);
+      const novels = this.parseNovelList(body);
+      if (novels.length > 0) {
+        await this.warmTagOptions(novels);
+        return novels;
+      }
+    } catch {
+      // The site search route is unstable, so fall back to recent pages.
+    }
 
-    // const addPage = async (pageCheerio: CheerioAPI, redirect: string) => {
-    //     const loadSearchResults = () => {
-    //         pageCheerio(".book-ol .book-layout").each((i, el) => {
-    //             let nUrl = pageCheerio(el).attr("href");
+    const normalized = searchTerm.trim().toLowerCase();
+    const startPage = (pageNo - 1) * 5 + 1;
+    const matched: Plugin.NovelItem[] = [];
+    const seen = new Set<string>();
 
-    //             const novelName = pageCheerio(el)
-    //                 .find(".book-title")
-    //                 .text();
-    //             const novelCover = pageCheerio(el)
-    //                 .find("div.book-cover > img")
-    //                 .attr("data-src");
-    //             const novelUrl = this.site + nUrl;
-
-    //             if (!nUrl) return;
-
-    //             novels.push({
-    //                 name: novelName,
-    //                 url: novelUrl,
-    //                 cover: novelCover,
-    //             });
-    //         });
-    //     };
-
-    //     const novelResults = pageCheerio(".book-ol a.book-layout");
-    //     if (novelResults.length === 0) {
-    //     } else {
-    //         loadSearchResults();
-    //     }
-
-    //     if (redirect.length) {
-    //         novels.length = 0;
-    //         const novelName = pageCheerio(
-    //             "#bookDetailWrapper .book-title"
-    //         ).text();
-
-    //         const novelCover = pageCheerio(
-    //             "#bookDetailWrapper div.book-cover > img"
-    //         ).attr("src");
-    //         const novelUrl =
-    //             this.site +
-    //             pageCheerio("#btnReadBook").attr("href")?.slice(0, -8) +
-    //             ".html";
-    //         novels.push({
-    //             name: novelName,
-    //             url: novelUrl,
-    //             cover: novelCover,
-    //         });
-    //     }
-    // };
-
-    // NOTE: don't know redirect is for what, comment out for now
-
-    // const redirect = pageCheerio("div.book-layout").text();
-    // await addPage(pageCheerio, redirect);
-
-    pageCheerio('.book-ol .book-layout').each((i, el) => {
-      const nUrl = pageCheerio(el).attr('href');
-
-      const novelName = pageCheerio(el).find('.book-title').text();
-      const novelCover = pageCheerio(el)
-        .find('div.book-cover > img')
-        .attr('data-src');
-
-      if (!nUrl) return;
-
-      novels.push({
-        name: novelName,
-        path: nUrl,
-        cover: novelCover,
+    for (
+      let currentPage = startPage;
+      currentPage < startPage + 5;
+      currentPage += 1
+    ) {
+      const fallbackBody = await this.fetchPage(
+        `${this.site}/wenku/postdate_0_0_0_0_0_0_0_${currentPage}_0.html`,
+      );
+      const novels = this.parseNovelList(fallbackBody).filter(novel => {
+        const genres = (novel as NovelListItem).genres || '';
+        return (
+          novel.name.toLowerCase().includes(normalized) ||
+          genres.toLowerCase().includes(normalized)
+        );
       });
-    });
 
-    return novels;
+      novels.forEach(novel => {
+        if (!seen.has(novel.path)) {
+          seen.add(novel.path);
+          matched.push(novel);
+        }
+      });
+
+      if (matched.length >= 20) {
+        break;
+      }
+    }
+
+    await this.warmTagOptions(matched);
+    return matched;
   }
 
   filters = {
     rank: {
-      label: '排行榜',
+      label: 'Ranking',
       value: 'monthvisit',
       options: [
-        { label: '月點擊榜', value: 'monthvisit' },
-        { label: '周點擊榜', value: 'weekvisit' },
-        { label: '月推薦榜', value: 'monthvote' },
-        { label: '周推薦榜', value: 'weekvote' },
-        { label: '月鮮花榜', value: 'monthflower' },
-        { label: '周鮮花榜', value: 'weekflower' },
-        { label: '月鷄蛋榜', value: 'monthegg' },
-        { label: '周鷄蛋榜', value: 'weekegg' },
-        { label: '最近更新', value: 'lastupdate' },
-        { label: '最新入庫', value: 'postdate' },
-        { label: '收藏榜', value: 'goodnum' },
-        { label: '新書榜', value: 'newhot' },
+        { label: 'Monthly Views', value: 'monthvisit' },
+        { label: 'Weekly Views', value: 'weekvisit' },
+        { label: 'Monthly Votes', value: 'monthvote' },
+        { label: 'Weekly Votes', value: 'weekvote' },
+        { label: 'Monthly Flowers', value: 'monthflower' },
+        { label: 'Weekly Flowers', value: 'weekflower' },
+        { label: 'Monthly Eggs', value: 'monthegg' },
+        { label: 'Weekly Eggs', value: 'weekegg' },
+        { label: 'Latest Update', value: 'lastupdate' },
+        { label: 'New Arrivals', value: 'postdate' },
+        { label: 'Rating', value: 'goodnum' },
+        { label: 'Trending', value: 'newhot' },
       ],
       type: FilterTypes.Picker,
+    },
+    customTag: {
+      label: 'Tag',
+      value: [] as string[],
+      options: [] as TagOption[],
+      maxSelections: 1,
+      type: FilterTypes.AutocompleteMulti,
     },
   } satisfies Filters;
 }
 
-export default new Linovelib_tw();
+export default new LinovelibTw();
