@@ -62,20 +62,19 @@ class LinovelibTw implements Plugin.PluginBase {
     }
   }
 
-  private getSelectedTagPath(
+  private getSelectedTagPaths(
     filters?: Plugin.PopularNovelsOptions<typeof this.filters>['filters'],
-  ): string | undefined {
+  ): string[] {
     const customTag = filters?.customTag?.value as unknown;
     if (Array.isArray(customTag)) {
-      const selected = customTag.find(
-        value => typeof value === 'string' && value.trim() !== '',
-      );
-      return typeof selected === 'string' ? selected.trim() : undefined;
+      return customTag
+        .filter(value => typeof value === 'string' && value.trim() !== '')
+        .map(value => value.trim());
     }
     if (typeof customTag === 'string' && customTag.trim() !== '') {
-      return customTag.trim();
+      return [customTag.trim()];
     }
-    return undefined;
+    return [];
   }
 
   private makeAbsolute(url?: string | null): string {
@@ -168,6 +167,35 @@ class LinovelibTw implements Plugin.PluginBase {
     return this.parseNovelList(body);
   }
 
+  private async fetchMultiTagNovels(
+    tagPaths: string[],
+    rank: string,
+    pageNo: number,
+  ): Promise<Plugin.NovelItem[]> {
+    const normalizedPaths = Array.from(
+      new Set(
+        tagPaths.map(path => this.applyRankToTagPath(path, rank, pageNo)),
+      ),
+    );
+    if (normalizedPaths.length === 0) return [];
+
+    const tagResults = await Promise.all(
+      normalizedPaths.map(tagPath => this.fetchTagPage(tagPath, pageNo)),
+    );
+    if (tagResults.length === 0) return [];
+
+    const [primaryResults, ...otherResults] = tagResults;
+    if (otherResults.length === 0) return primaryResults;
+
+    const allowedPaths = otherResults.map(
+      novels => new Set(novels.map(novel => novel.path)),
+    );
+
+    return primaryResults.filter(novel =>
+      allowedPaths.every(pathSet => pathSet.has(novel.path)),
+    );
+  }
+
   private applyRankToTagPath(
     tagPath: string,
     rank: string,
@@ -232,10 +260,11 @@ class LinovelibTw implements Plugin.PluginBase {
     this.refreshTagOptions();
 
     const rank = showLatestNovels ? 'postdate' : filters.rank.value;
-    const selectedTagPath = this.getSelectedTagPath(filters);
-    if (selectedTagPath) {
-      const tagNovels = await this.fetchTagPage(
-        this.applyRankToTagPath(selectedTagPath, rank, pageNo),
+    const selectedTagPaths = this.getSelectedTagPaths(filters);
+    if (selectedTagPaths.length > 0) {
+      const tagNovels = await this.fetchMultiTagNovels(
+        selectedTagPaths,
+        rank,
         pageNo,
       );
       if (tagNovels.length > 0) {
@@ -472,7 +501,6 @@ class LinovelibTw implements Plugin.PluginBase {
       label: 'Tag',
       value: [] as string[],
       options: [] as TagOption[],
-      maxSelections: 1,
       type: FilterTypes.AutocompleteMulti,
     },
   } satisfies Filters;
